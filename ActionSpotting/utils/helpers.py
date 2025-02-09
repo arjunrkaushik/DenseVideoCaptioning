@@ -19,3 +19,12 @@ def save_dataset(feature_path, label_path, split, video_length, overlap):
         save_path = f"/data/kaushik3/SoccerData/Baidu_Features/ActionSpotting_v2_{split}_video_length_{video_length}_overlap_{overlap}.pt"
     torch.save(data_list, save_path)
     print(f"Dataset saved to {save_path}")
+
+def to_numpy(x):
+    import torch
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    elif isinstance(x, list):
+        return np.array(x)
+    else:
+        return x

@@ -4,7 +4,10 @@ import torch.nn.functional as F
 from torch.nn import MultiheadAttention
 import math
 
-from basic import PositionalEncoding
+from basic import PositionalEncoding, logit2prob
+from blocks import Block, UpdateBlock, InputBlock, UpdateBlockTDU
+from ..utils.helpers import to_numpy
+from loss import MatchCriterion, torch_class_label_to_segment_label
 
 class ActionDetectionModel(nn.Module):
     def __init__(self, args, num_heads=8, refinement_iters=2):
@@ -161,3 +164,131 @@ class ActionDetectionModel(nn.Module):
         
         iou = intersection / union
         return iou + 1e-6  # Prevent logarithm of zero in KL loss
+
+
+class ActionDetectionModel2(nn.Module):
+    def __init__(self, args, num_heads=8, refinement_iters=2):
+        super(ActionDetectionModel2, self).__init__()
+        self.args = args
+        self.frame_emb_dim = args.frame_emb_dim
+        self.num_actions = args.num_action_classes
+        self.num_frames = args.num_frames
+        self.refinement_iters = refinement_iters
+
+        # Learnable parameters (queries and centroids)
+        self.action_queries = nn.Parameter(torch.randn(args.num_action_classes, args.frame_emb_dim))
+        self.cluster_centroids = nn.Parameter(torch.randn(args.num_action_classes, args.frame_emb_dim))
+        
+        # Label embeddings will be provided externally but are projected to d_model
+        self.label_embeddings_projector = nn.Linear(label_emb_dim, args.frame_emb_dim)
+        
+        # Learnable positional encodings for frames and queries
+        self.frame_pos_enc = PositionalEncoding(args.frame_emb_dim, max_len=10000)
+        self.query_pos_enc = nn.Parameter(torch.randn(args.num_action_classes, args.frame_emb_dim))
+        
+
+        # block configuration
+        block_list = []
+        for i, t in enumerate(args.actionModel.blocks):
+            if t == 'i':
+                block = InputBlock(args, args.actionModel.frame_emb_dim, args.actionModel.num_action_classes)
+            elif t == 'u':
+                # update_from(cfg.Bu, base_cfg, inplace=True)
+                # base_cfg = cfg.Bu
+                block = UpdateBlock(args, args.actionModel.num_action_classes)
+            elif t == 'U':
+                # update_from(cfg.BU, base_cfg, inplace=True)
+                # base_cfg = cfg.BU
+                block = UpdateBlockTDU(args, args.actionModel.num_action_classes)
+
+            block_list.append(block)
+
+        self.block_list = nn.ModuleList(block_list)
+
+        self.mcriterion = None
+        
+    def _forward_one_video(self, seq, transcript=None):
+        # prepare frame feature
+        frame_feature = seq
+        frame_pe = self.frame_pe(seq)
+        if self.args.actionModel.cmr:
+            frame_feature = frame_feature.permute([1, 2, 0])
+            frame_feature = self.channel_masking_dropout(frame_feature)
+            frame_feature = frame_feature.permute([2, 0, 1])
+
+        if self.args.actionModel.tm.use and self.training:
+            frame_feature = time_mask(feature = frame_feature, 
+                        T = self.args.actionModel.tm.t, 
+                        num_masks = self.cfg.TM.m, 
+                        p = self.cfg.TM.p, 
+                        replace_with_zero=True)
+
+        # prepare action feature
+        # if not self.cfg.FACT.trans:
+        action_pe = self.action_query # M, B(=1), H
+        action_feature = torch.zeros_like(action_pe)
+        # else:
+        #     action_pe = self.action_pe(transcript)
+        #     action_feature = self.action_embed(transcript).unsqueeze(1)
+
+        #     action_feature = action_feature + action_pe
+        #     action_pe = torch.zeros_like(action_pe)
+
+        # forward
+        # frame_feature: T, B(=1), H
+        # action_feature: M, B(=1), H
+        block_output = []
+        for i, block in enumerate(self.block_list):
+            frame_feature, action_feature = block(frame_feature, action_feature, frame_pe, action_pe)
+            block_output.append([frame_feature, action_feature])
+        return block_output
+
+    def _loss_one_video(self, label):
+        mcriterion: MatchCriterion = self.mcriterion
+        mcriterion.set_label(label)
+
+        block : Block = self.block_list[-1]
+        cprob = logit2prob(block.action_clogit, dim=-1)
+        match = mcriterion.match(cprob, block.a2f_attn)
+
+        ######## per block loss
+        loss_list = []
+        for block in self.block_list:
+            loss = block.compute_loss(mcriterion, match)
+            loss_list.append(loss)
+
+        self.loss_list = loss_list
+        final_loss = sum(loss_list) / len(loss_list)
+        return final_loss
+
+    def forward(self, seq_list, label_list, compute_loss=False):
+
+        save_list = []
+        final_loss = []
+
+        for i, (seq, label) in enumerate(zip(seq_list, label_list)):
+            seq = seq.unsqueeze(1)
+            trans = torch_class_label_to_segment_label(label)[0]
+            self._forward_one_video(seq, trans)
+
+            pred = self.block_list[-1].eval(trans)
+            save_data = {'pred': to_numpy(pred)}
+            save_list.append(save_data)
+
+            if compute_loss:
+                loss = self._loss_one_video(label)
+                final_loss.append(loss)
+                save_data['loss'] = { 'loss': loss.item() }
+
+
+        if compute_loss:
+            final_loss = sum(final_loss) / len(final_loss)
+            return final_loss, save_list
+        else:
+            return save_list
+
+    def save_model(self, fname):
+        torch.save(self.state_dict(), fname)
+    
+
+

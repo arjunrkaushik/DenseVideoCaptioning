@@ -7,14 +7,68 @@
         "load_data" : true
     },
     "device": "cuda:0",
-    "model": {
-        "batch_size": 32,
-        "num_epochs": 20,
-        "learning_rate": 1e-4,
+    "batch_size": 32,
+    "num_epochs": 20,
+    "learning_rate": 1e-4,
+    "actionModel": {
         "frame_emb_dim": 2048,
         "label_emb_dim": 4096,
         "num_action_classes": 18,
-        "num_frames": 15,     
+        "num_frames": 15,
+        "cmr": 0.3,
+        "tm" : {
+            "inplace" : true,
+            "m" : 5,
+            "p" : 0.05,
+            "t" : 15, 
+            "use" : true
+        },
+        "blocks" : "iuUU",
+        "inputBlock" : {
+            "a": "sca",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 6,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.0,
+            "hid_dim" : 2048
+        },
+        "updateBlock" : {
+            "a": "sa",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 1,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.0,
+            "hid_dim" : 2048
+        },
+        "upDownBlock" : {
+            "a": "sa",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 1,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.0,
+            "hid_dim" : 2048            
+        }     
     }
 
 }

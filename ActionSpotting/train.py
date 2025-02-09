@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from scipy.optimize import linear_sum_assignment
+from types import SimpleNamespace
 
 from utils.helpers import load_json
 from utils.dataset import ActionSpotting_v2
@@ -189,21 +190,13 @@ def get_args(config_file):
     args = parser.parse_args()
 
     config = load_json(config_file)
-    args.feature_path = config['dataset']['feature_path']
-    args.label_path = config['dataset']['label_path']
-    args.video_length = config['dataset']['video_length']
-    args.overlap = config['dataset']['overlap']
-    args.load_data = config['dataset']['load_data']
+    args.dataset = SimpleNamespace(**config['dataset'])
         
     args.device = config['device']
-
-    args.batch_size = config['model']['batch_size']
-    args.num_epochs = config['model']['num_epochs']
-    args.learning_rate = config['model']['learning_rate']
-    args.frame_emb_dim = config['model']['frame_emb_dim']
-    args.label_emb_dim = config['model']['label_emb_dim']
-    args.num_action_classes = config['model']['num_action_classes']
-    args.num_frames = config['model']['num_frames']
+    args.batch_size = config['batch_size']
+    args.num_epochs = config['num_epochs']
+    args.lr = config['learning_rate']
+    args.actionModel = SimpleNamespace(**config['actionModel'])
 
     wandb.init(
         project= 'Action Spotting',
@@ -213,8 +206,8 @@ def get_args(config_file):
 
 def main(args):
     device = args.device
-    train_dataset = ActionSpotting_v2(feature_path=args.feature_path, label_path=args.label_path, split='train', video_length=args.video_length, overlap=args.overlap, load_data=args.load_data)
-    val_dataset = ActionSpotting_v2(feature_path=args.feature_path, label_path=args.label_path, split='val', video_length=args.video_length, overlap=args.overlap, load_data=args.load_data)
+    train_dataset = ActionSpotting_v2(feature_path=args.dataset.feature_path, label_path=args.dataset.label_path, split='train', video_length=args.dataset.video_length, overlap=args.dataset.overlap, load_data=args.dataset.load_data)
+    val_dataset = ActionSpotting_v2(feature_path=args.dataset.feature_path, label_path=args.dataset.label_path, split='val', video_length=args.dataset.video_length, overlap=args.dataset.overlap, load_data=args.dataset.load_data)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
