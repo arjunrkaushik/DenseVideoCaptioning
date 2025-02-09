@@ -1,0 +1,20 @@
+{
+    "dataset": {
+        "feature_path" : "/data/kaushik3/SoccerData/ResNET_features",
+        "label_path" : "/data/kaushik3/SoccerData/ActionSpotting/ActionSpotting_v2",
+        "video_length" : 15,
+        "overlap" : 5,
+        "load_data" : true
+    },
+    "device": "cuda:0",
+    "model": {
+        "batch_size": 32,
+        "num_epochs": 20,
+        "learning_rate": 1e-4,
+        "frame_emb_dim": 2048,
+        "label_emb_dim": 4096,
+        "num_action_classes": 18,
+        "num_frames": 15,     
+    }
+
+}
