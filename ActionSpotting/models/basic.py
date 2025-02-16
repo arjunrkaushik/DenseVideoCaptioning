@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from typing import Optional
 import random
 import copy
+import wandb
+import matplotlib.pyplot as plt
 
 def time_mask(feature, T, num_masks, p, replace_with_zero=False, clone=False):
     """
@@ -229,7 +231,7 @@ def _get_activation_fn(activation):
 
 class X2Y_map(nn.Module):
 
-    def __init__(self, x_dim, y_dim, y_outdim, head_dim, dropout=0.5, kq_pos=False):
+    def __init__(self, x_dim, y_dim, y_outdim, head_dim, dropout=0.5, kq_pos=False, name = "X2Y_map"):
         super(X2Y_map, self).__init__()
         self.kq_pos = kq_pos
 
@@ -240,6 +242,7 @@ class X2Y_map(nn.Module):
         self.Y_W = nn.Linear(y_dim+head_dim, y_outdim)
 
         self.dropout = nn.Dropout(dropout)
+        self.name = name
 
     def forward(self, X_feature, Y_feature, X_pos=None, Y_pos=None, X_pad_mask=None, Y_pad_mask=None, ):
         """
@@ -282,6 +285,32 @@ class X2Y_map(nn.Module):
         self.attn = attn.unsqueeze(1) # B, nhead=1, X, Y
 
         return Y_feature
+    
+    def log_attention_map(self):
+        """Logs the attention map to WandB"""
+        attn_map = self.attn.detach().cpu().numpy()  # Convert tensor to NumPy
+
+        for i in range(attn_map.shape[0]):
+            plt.figure(figsize=(8, 6))
+            plt.imshow(attn_map[i][0], cmap="viridis", aspect="auto")
+            plt.colorbar()
+            plt.title(f"Attention Map of {self.name} Batch {i}")
+            plt.xlabel("X (Key)")
+            plt.ylabel("Y (Query)")
+
+            # Log to WandB
+            wandb.log({f"Attention Map Batch {i} {self.name}": wandb.Image(plt)})
+            plt.close()
+        # plt.figure(figsize=(8, 6))
+        # plt.imshow(attn_map[0][0], cmap="viridis", aspect="auto")
+        # plt.colorbar()
+        # plt.title(f"Attention Map of {self.name}")
+        # plt.xlabel("X (Key)")
+        # plt.ylabel("Y (Query)")
+
+        # # Log to WandB
+        # wandb.log({f"Attention Map Batch {self.name}": wandb.Image(plt)})
+        # plt.close()
 
 class SALayer(nn.Module):
     """

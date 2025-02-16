@@ -4,8 +4,8 @@ from scipy.optimize import linear_sum_assignment
 import numpy as np
 
 
-from basic import TemporalDownsampleUpsample
-from ..utils.helpers import to_numpy
+from models.basic import TemporalDownsampleUpsample
+from utils.helpers import to_numpy
 
 def smooth_loss(logit, is_logit=True):
     """
@@ -50,9 +50,9 @@ def logit2prob(clogit, dim=-1, class_sep=None):
 
 class MatchCriterion():
 
-    def __init__(self, cfg, nclasses, bg_ids=[], class_weight=None):
-        self.cfg = cfg
-        self.nclasses = nclasses
+    def __init__(self, args, nclasses, bg_ids=[], class_weight=None):
+        self.args = args
+        self.num_action_classes = nclasses
         self.bg_ids = bg_ids
         self._class_weight=class_weight
 
@@ -60,18 +60,19 @@ class MatchCriterion():
     def set_label(self, label):
         self.class_label = label
         self.transcript, self.seg_label = torch_class_label_to_segment_label(label)
-        self.onehot_class_label = self._label_to_onehot(self.class_label, self.nclasses)
+        self.onehot_class_label = self._label_to_onehot(self.class_label, self.num_action_classes)
         self.onehot_seg_label = self._label_to_onehot(self.seg_label, len(self.transcript))
+        
 
         # create class weight
-        cweight = torch.ones(self.nclasses+1).to(label.device)
-        cweight[-1] = self.cfg.Loss.nullw
+        cweight = torch.ones(self.num_action_classes+1).to(label.device)
+        cweight[-1] = self.args.matchCriterion.nullw
         if self._class_weight is not None:
-            for i in range(self.nclasses):
+            for i in range(self.num_action_classes):
                 cweight[i] = self._class_weight[i]
         else:
             for i in self.bg_ids:
-                cweight[i] = self.cfg.Loss.bgw
+                cweight[i] = self.args.matchCriterion.bg_wt
 
         # create weight for each action segment based on class weight
         sweight = torch.ones_like(self.transcript, dtype=torch.float32)
@@ -80,7 +81,7 @@ class MatchCriterion():
                 sweight[i] = self._class_weight[t]
         else:
             for i in self.bg_ids:
-                sweight[self.transcript==i] = self.cfg.Loss.bgw
+                sweight[self.transcript==i] = self.args.matchCriterion.bg_wt
 
         self.cweight=cweight
         self.sweight=sweight
@@ -115,7 +116,7 @@ class MatchCriterion():
         """
         assert clogit.shape[1] == 1 # batch_size == 1
 
-        match_cfg = self.cfg.Loss
+        match_cfg = self.args.matchCriterion
         transcript = self.transcript
         onehot_seg_label = self.onehot_seg_label
 

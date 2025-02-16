@@ -1,0 +1,93 @@
+{
+    "dataset": {
+        "feature_path" : "/data/kaushik3/SoccerData/ResNET_features",
+        "label_path" : "/data/kaushik3/SoccerData/ActionSpotting/ActionSpotting_v2",
+        "video_length" : 15,
+        "overlap" : 5,
+        "load_data" : true,
+        "bg_id" : 0,
+        "num_action_classes" : 18
+    },
+    "device": "cuda:0",
+    "logdir" : "/home/csgrad/kaushik3/DenseVideoCaptioning/ActionSpotting/logdir",
+    "batch_size": 128,
+    "num_epochs": 100,
+    "warmup_steps" : 5,
+    "learning_rate": 5e-4,
+    "lr_decay": 0.1,
+    "wt_decay": 0.0,
+    "clip_grad_norm" : 10.0,
+    "matchCriterion": {
+        "bg_wt": 0.07,
+        "match" : "o2o",
+        "pc" : 0.2,
+        "a2fc" : 1.0,
+        "nullw" : 0.05
+    },
+    "actionModel": {
+        "frame_emb_dim": 2048,
+        "label_emb_dim": 4096,
+        "num_action_classes": 18,
+        "num_action_queries" : 10,
+        "fpos" : false,
+        "use_cmr": false,
+        "cmr": 0.3,
+        "mwt": 0.7,
+        "tm" : {
+            "_comment" : "t is num of input frames",
+            "inplace" : true,
+            "m" : 5,
+            "p" : 0.05,
+            "t" : 15, 
+            "use" : false
+        },
+        "blocks" : "iuu",
+        "inputBlock" : {
+            "a": "sca",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 6,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.0,
+            "hid_dim" : 2048
+        },
+        "updateBlock" : {
+            "a": "sa",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 1,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.2,
+            "hid_dim" : 2048
+        },
+        "upDownBlock" : {
+            "a": "sa",
+            "a_dim" : 2048,
+            "a_ffdim" : 2048,
+            "a_layers": 1,
+            "a_num_heads" : 8,
+            "f" : "m2",
+            "f_dim" : 2048,
+            "f_layers" : 10,
+            "f_ln" : false,
+            "f_ngroups" : 1,
+            "loss_sw" : 5.0,
+            "dropout" : 0.3,
+            "hid_dim" : 2048,
+            "s_layers" : 1            
+        }     
+    }
+
+}

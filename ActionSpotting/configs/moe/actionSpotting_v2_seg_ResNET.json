@@ -1,0 +1,42 @@
+{
+    "dataset": {
+        "name" : "ActionSpotting_v2_segments",
+        "feature_path" : "/data/kaushik3/SoccerData/ResNET_features",
+        "label_path" : "/data/kaushik3/SoccerData/ActionSpotting/ActionSpotting_v2_segments",
+        "video_length" : 15,
+        "overlap" : 5,
+        "load_data" : true,
+        "bg_id" : 0,
+        "num_action_classes" : 18
+    },
+    "device": "cuda:0",
+    "logdir" : "/home/csgrad/kaushik3/DenseVideoCaptioning/ActionSpotting/logdir",
+    "batch_size": 128,
+    "num_epochs": 100,
+    "warmup_steps" : 5,
+    "learning_rate": 5e-4,
+    "lr_decay": 0.1,
+    "wt_decay": 0.0,
+    "clip_grad_norm" : 10.0,
+    "sas": {
+        "frame_dim" : 2048, 
+        "num_experts" : 18, 
+        "num_classes" : 18,
+        "pes" : {
+            "temperature" : 0.1,
+            "llm_name" : "meta-llama/Llama-3.2-3B-Instruct",
+            "text_dim" : 3072,
+            "load_text_data" : true,
+            "text_data_path" : "/data/kaushik3/SoccerData/ActionSpotting/Label_emb"            
+        },
+        "loss" : {
+            "alpha" : 1,
+            "beta" : 1,
+            "label_smoothing" : 0.1,
+            "temperature" : 0.07
+            
+
+        }
+    }
+
+}

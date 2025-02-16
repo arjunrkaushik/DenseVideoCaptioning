@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mstcn import MSTCN2
-from basic import SALayer, SADecoder, SCALayer, SCADecoder, ActionUpdate_GRU, X2Y_map, logit2prob
+from models.mstcn import MSTCN2
+from models.basic import SALayer, SADecoder, SCALayer, SCADecoder, ActionUpdate_GRU, X2Y_map, logit2prob, TemporalDownsampleUpsample
+from models.loss import MatchCriterion, smooth_loss
+from utils.helpers import to_numpy, parse_label
 
 
 class Block(nn.Module):
@@ -39,7 +41,7 @@ class Block(nn.Module):
         #                         dropout=cfg.dropout, ln=cfg.f_ln, ngroup=cfg.f_ngp, in_map=f_inmap)
         if args.f == 'm2': # use MSTCN++
             frame_branch = MSTCN2(in_dim = in_dim, num_f_maps = args.f_dim, out_dim = args.hid_dim, num_layers = args.f_layers, 
-                                dropout = args.dropout, ln = args.f_ln, ngroup = args.f_ngp, in_map=f_inmap)
+                                dropout = args.dropout, ln = args.f_ln, ngroup = args.f_ngroups, in_map=f_inmap)
         
         return frame_branch
 
@@ -48,7 +50,7 @@ class Block(nn.Module):
             layer = SALayer(q_dim = args.a_dim, nhead = args.a_num_heads, ff_dim = args.a_ffdim, dropout = args.dropout, attn_dropout = args.dropout)
             action_branch = SADecoder(in_dim = args.a_dim, hid_dim = args.a_dim, out_dim = args.hid_dim, decoder_layer = layer, num_layers = args.a_layers, in_map=False)
         elif args.a == 'sca': # self+cross-attention layers, for input blocks when video transcripts are not available
-            layer = SCALayer(action_dim = args.a_dim, frame_dim = args.hid_dim, nhead = args.a_num_heads, ff_dim = agrs.a_ffdim, dropout=args.dropout, attn_dropout=args.dropout)
+            layer = SCALayer(action_dim = args.a_dim, frame_dim = args.hid_dim, nhead = args.a_num_heads, ff_dim = args.a_ffdim, dropout=args.dropout, attn_dropout=args.dropout)
             norm = torch.nn.LayerNorm(args.a_dim)
             action_branch = SCADecoder(in_dim = args.a_dim, hid_dim = args.a_dim, out_dim = args.hid_dim, decoder_layer = layer, num_layers = args.a_layers, norm=norm, in_map=False)
         # elif args.a in ['gru', 'gru_om']: # GRU, for input blocks when video transcripts are available
@@ -60,10 +62,10 @@ class Block(nn.Module):
 
         return action_branch
 
-    def create_cross_attention(self, args, outdim, kq_pos=True):
+    def create_cross_attention(self, args, outdim, kq_pos=True, name = 'x2y'):
         # one layer of cross-attention for cross-branch communication
         layer = X2Y_map(x_dim = args.hid_dim, y_dim = args.hid_dim, y_outdim = outdim, 
-            head_dim=cfg.hid_dim, dropout=cfg.dropout, kq_pos=kq_pos)
+            head_dim=args.hid_dim, dropout=args.dropout, kq_pos=kq_pos, name=name)
         
         return layer
 
@@ -103,19 +105,19 @@ class Block(nn.Module):
         return pred
 
     def eval(self, transcript=None):
-        if not self.cfg.FACT.trans:
-            return self._eval(self.action_clogit, self.a2f_attn, self.frame_clogit, self.cfg.FACT.mwt)
-        else:
-            return self._eval_w_transcript(transcript, self.a2f_attn, self.frame_clogit, self.cfg.FACT.mwt)
+        # if not self.cfg.FACT.trans:
+        return self._eval(self.action_clogit, self.a2f_attn, self.frame_clogit, self.args.actionModel.mwt)
+        # else:
+        #     return self._eval_w_transcript(transcript, self.a2f_attn, self.frame_clogit, self.cfg.FACT.mwt)
 
 
 class InputBlock(Block):
     def __init__(self, args, in_dim, nclass):
         super().__init__()
-        # self.args = args
+        self.args = args
         self.num_action_classes = nclass
 
-        self.args = args.actionModel.inputBlock
+        # self.args = args.actionModel.inputBlock
 
         self.frame_branch = self.create_fbranch(args.actionModel.inputBlock, in_dim, f_inmap=True)
         self.action_branch = self.create_abranch(args.actionModel.inputBlock)
@@ -127,7 +129,7 @@ class InputBlock(Block):
 
         # action branch
         action_feature = self.action_branch(action_feature, frame_feature, pos=frame_pos, query_pos=action_pos)
-        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes)
+        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes+1)
         
         # save features for loss and evaluation
         self.frame_clogit = frame_clogit 
@@ -135,14 +137,14 @@ class InputBlock(Block):
 
         return frame_feature, action_feature
 
-    def compute_loss(self, criterion: loss.MatchCriterion, match=None):
+    def compute_loss(self, criterion: MatchCriterion, match=None):
         frame_loss = criterion.frame_loss(self.frame_clogit.squeeze(1))
         atk_loss = criterion.action_token_loss(match, self.action_clogit)
 
         frame_clogit = torch.transpose(self.frame_clogit, 0, 1) 
-        smooth_loss = loss.smooth_loss(frame_clogit)
+        s_loss = smooth_loss(frame_clogit)
 
-        return frame_loss + atk_loss + self.args.loss_sw * smooth_loss
+        return frame_loss + atk_loss + self.args.actionModel.inputBlock.loss_sw * s_loss
         
 
 class UpdateBlock(Block):
@@ -152,19 +154,19 @@ class UpdateBlock(Block):
         self.args = args
         self.num_action_classes = nclass
 
-        self.args = args.actionModel.updateBlock
+        # self.args = args.actionModel.updateBlock
 
         # fbranch
-        self.frame_branch = self.create_fbranch(args.actionModel.updateBlock)
+        self.frame_branch = self.create_fbranch(args.actionModel.updateBlock, in_dim=args.actionModel.updateBlock.f_dim)
 
         # f2a: query is action
-        self.f2a_layer = self.create_cross_attention(args.actionModel.updateBlock, args.actionModel.updateBlock.a_dim)
+        self.f2a_layer = self.create_cross_attention(args.actionModel.updateBlock, args.actionModel.updateBlock.a_dim, name = 'f2a_update block')
 
         # abranch
         self.action_branch = self.create_abranch(args.actionModel.updateBlock)
 
         # a2f: query is frame
-        self.a2f_layer = self.create_cross_attention(args.actionModel.updateBlock, args.actionModel.updateBlock.f_dim)
+        self.a2f_layer = self.create_cross_attention(args.actionModel.updateBlock, args.actionModel.updateBlock.f_dim, name = 'a2f_update block')
 
     def forward(self, frame_feature, action_feature, frame_pos, action_pos):
         # a->f
@@ -172,7 +174,7 @@ class UpdateBlock(Block):
 
         # a branch
         action_feature = self.action_branch(action_feature, action_pos)
-        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes)
+        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes+1)
 
         # f->a
         frame_feature = self.a2f_layer(action_feature, frame_feature, X_pos=action_pos, Y_pos=frame_pos)
@@ -190,20 +192,20 @@ class UpdateBlock(Block):
         self.a2f_attn_logit = self.a2f_layer.attn_logit[0].unsqueeze(0)
         return frame_feature, action_feature
 
-    def compute_loss(self, criterion: loss.MatchCriterion, match=None):
+    def compute_loss(self, criterion: MatchCriterion, match=None):
         frame_loss = criterion.frame_loss(self.frame_clogit.squeeze(1)) 
         atk_loss = criterion.action_token_loss(match, self.action_clogit)
         f2a_loss = criterion.cross_attn_loss(match, torch.transpose(self.f2a_attn_logit, 1, 2), dim=1)
         a2f_loss = criterion.cross_attn_loss(match, self.a2f_attn_logit, dim=2)
 
         # temporal smoothing loss
-        al = loss.smooth_loss( self.a2f_attn_logit )
-        fl = loss.smooth_loss( torch.transpose(self.f2a_attn_logit, 1, 2) )
+        al = smooth_loss( self.a2f_attn_logit )
+        fl = smooth_loss( torch.transpose(self.f2a_attn_logit, 1, 2) )
         frame_clogit = torch.transpose(self.frame_clogit, 0, 1) # f, 1, c -> 1, f, c
-        l = loss.smooth_loss( frame_clogit )
-        smooth_loss = al + fl + l
+        l = smooth_loss( frame_clogit )
+        s_loss = al + fl + l
 
-        return atk_loss + f2a_loss + a2f_loss + frame_loss + self.args.loss_sw * smooth_loss
+        return atk_loss + f2a_loss + a2f_loss + frame_loss + self.args.actionModel.updateBlock.loss_sw * s_loss
 
 
 class UpdateBlockTDU(Block):
@@ -216,23 +218,23 @@ class UpdateBlockTDU(Block):
         # self.cfg = cfg
         self.num_action_classes = nclass
 
-        self.args = args.actionModel.upDownBlock
+        self.args = args
 
         # fbranch
-        self.frame_branch = self.create_fbranch(args.actionModel.upDownBlock)
+        self.frame_branch = self.create_fbranch(args.actionModel.upDownBlock, in_dim = args.actionModel.upDownBlock.f_dim)
 
         # layers for temporal downsample and upsample
         self.seg_update = nn.GRU(args.actionModel.upDownBlock.hid_dim, args.actionModel.upDownBlock.hid_dim//2, args.actionModel.upDownBlock.s_layers, bidirectional=True)
         self.seg_combine = nn.Linear(args.actionModel.upDownBlock.hid_dim, args.actionModel.upDownBlock.hid_dim)
 
         # f2a: query is action
-        self.f2a_layer = self.create_cross_attention(args.actionModel.upDownBlock, args.actionModel.upDownBlock.a_dim)
+        self.f2a_layer = self.create_cross_attention(args.actionModel.upDownBlock, args.actionModel.upDownBlock.a_dim, name = 'f2a_updateTDU block')
 
         # abranch
         self.action_branch = self.create_abranch(args.actionModel.upDownBlock)
 
         # a2f: query is frame
-        self.a2f_layer = self.create_cross_attention(args.actionModel.upDownBlock, args.actionModel.upDownBlock.f_dim)
+        self.a2f_layer = self.create_cross_attention(args.actionModel.upDownBlock, args.actionModel.upDownBlock.f_dim, name = 'a2f_updateTDU block')
 
         # layers for temporal downsample and upsample
         self.sf_merge = nn.Sequential(nn.Linear((args.actionModel.upDownBlock.hid_dim + args.actionModel.upDownBlock.f_dim), args.actionModel.upDownBlock.f_dim), nn.ReLU())
@@ -243,10 +245,10 @@ class UpdateBlockTDU(Block):
         # get action segments based on predictions
         cprob = frame_feature[:, :, -self.num_action_classes:]
         _, pred = cprob[:, 0].max(dim=-1)
-        pred = utils.to_numpy(pred)
-        segs = utils.parse_label(pred)
+        pred = to_numpy(pred)
+        segs = parse_label(pred)
 
-        tdu = basic.TemporalDownsampleUpsample(segs)
+        tdu = TemporalDownsampleUpsample(segs)
         tdu.to(cprob.device)
 
         # downsample frames to segments
@@ -281,7 +283,7 @@ class UpdateBlockTDU(Block):
 
         # a branch
         action_feature = self.action_branch(action_feature, action_pos)
-        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes)
+        action_feature, action_clogit = self.process_feature(action_feature, self.num_action_classes+1)
 
         # a->f
         seg_feature = self.a2f_layer(action_feature, seg_feature, X_pos=action_pos, Y_pos=seg_pos)
@@ -314,6 +316,6 @@ class UpdateBlockTDU(Block):
         a2f_loss = criterion.cross_attn_loss_tdu(match, self.a2f_attn_logit, self.tdu, dim=2)
 
         frame_clogit = torch.transpose(self.frame_clogit, 0, 1) 
-        smooth_loss = loss.smooth_loss( frame_clogit )
+        s_loss = smooth_loss( frame_clogit )
 
-        return (frame_loss + seg_loss)/ 2 + atk_loss + f2a_loss + a2f_loss + self.args.loss_sw * smooth_loss
+        return (frame_loss + seg_loss)/ 2 + atk_loss + f2a_loss + a2f_loss + self.args.actionModel.upDownBlock.loss_sw * s_loss
